@@ -4,11 +4,10 @@
 
 **I need it, so I build it.**
 
-*Say it — it plans it.*
+**Voice-first task planner for Android.**
 
-Voice-first to-do capture for Android. Speak a messy sentence; the app turns it
-into clean, scheduled tasks, drops them into your calendar, and follows up like
-a person.
+Speak a messy sentence; the app turns it into clean, scheduled tasks, drops
+them into your calendar, and follows up like a person.
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](#requirements)
@@ -44,21 +43,59 @@ category. So I built the app I wanted: **say it, and it just works it out.**
 
 ## How it works
 
-```
-        speech                    +----------------------------+
-  🎙️  ──────────▶  transcript ──▶ |  Cloud LLM (Nemotron 30B)  | ──▶ structured tasks
-                                   |  strict JSON contract      |      (title · date · time
-                                   +----------------------------+       · kind · duration)
-                                                                              │
-                                                                              ▼
-                                                     scheduler → phone calendar → reminders
+```mermaid
+flowchart TD
+  A["Tap to talk"] --> B["On-device recognizer<br/>pause and resume keeps the transcript"]
+
+  subgraph EXTRACT["Extract · cloud LLM"]
+    C["Nemotron 30B<br/>prompt carries today's date and time"] --> D["Strict JSON contract<br/>title, date, time, kind, duration"]
+  end
+
+  subgraph PLAN["Plan · deterministic Dart"]
+    E["Validate and normalise"] --> F["Scheduler"]
+    F --> G["Flexible task goes to the lightest day at the best hour"]
+    F --> H["Clash or packed day offers a move"]
+  end
+
+  subgraph DELIVER["Deliver"]
+    I["Store on device"] --> J["Phone calendar (optional)"]
+    I --> K["Reminders and follow-ups"]
+    I --> L["Evening check-in and morning briefing"]
+  end
+
+  B --> C
+  D --> E
+  H --> I
 ```
 
-The model is given **today's date and the current time**, so relative phrases
-("tomorrow", "next week", "at 6pm") resolve against the real calendar. Its
-output is validated and normalised before it ever reaches the UI, so a bad
-generation can never produce a malformed task. See
-[`lib/services/ai.dart`](lib/services/ai.dart) for the prompt and the contract.
+The model receives **today's date and the current time**, so relative phrases
+("tomorrow", "next week", "at 6pm") resolve against the real calendar. It
+replies in a strict JSON contract:
+
+```json
+{
+  "tasks": [
+    {"title": "Call mom", "date": "2026-10-15", "time": "17:00", "kind": "fixed",    "duration": 15, "unsure": false},
+    {"title": "Study",    "date": null,          "time": null,   "kind": "flexible", "duration": 45, "unsure": false}
+  ]
+}
+```
+
+| field | type | meaning |
+|---|---|---|
+| `title` | string | short imperative ("Call mom") |
+| `date` | `YYYY-MM-DD` or `null` | resolved from today; `null` when the day is vague ("this week") |
+| `time` | `HH:MM` or `null` | 24-hour clock, or `null` |
+| `kind` | `fixed` / `deadline` / `flexible` | specific time / before-by-until / no date and no time |
+| `duration` | int | estimated minutes |
+| `unsure` | bool | true when the day is genuinely ambiguous |
+
+The reply is **validated and normalised** in Dart before it reaches the UI — a
+time with no day becomes today (or tomorrow once it has passed), a dated task is
+never left `flexible`, and a `deadline` only survives if the sentence actually
+said *before / by / until*. A bad generation can never produce a malformed task.
+See [`lib/services/ai.dart`](lib/services/ai.dart) for the prompt and the
+contract.
 
 Everything after extraction — placement, conflicts, reminders, check-in,
 streaks — is plain, deterministic Dart. No black boxes where correctness
