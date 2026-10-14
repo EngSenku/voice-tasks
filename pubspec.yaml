@@ -1,0 +1,29 @@
+name: voice_tasks
+description: Say it. It plans it.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.2.1
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  speech_to_text: ^7.0.0
+  flutter_tts: ^4.0.2
+  flutter_local_notifications: 17.2.4
+  timezone: ^0.9.4
+  flutter_timezone: ^3.0.1
+  device_calendar: ^4.3.2
+  quick_actions: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
