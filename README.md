@@ -44,158 +44,49 @@ category. So I built the app I wanted: **say it, and it just works it out.**
 ## How it works
 
 ```mermaid
-flowchart TD
-  A["Tap to talk"] --> B["On-device recognizer<br/>pause and resume keeps the transcript"]
-
-  subgraph EXTRACT["Extract · cloud LLM"]
-    C["Nemotron 30B<br/>prompt carries today's date and time"] --> D["Strict JSON contract<br/>title, date, time, kind, duration"]
-  end
-
-  subgraph PLAN["Plan · deterministic Dart"]
-    E["Validate and normalise"] --> F["Scheduler"]
-    F --> G["Flexible task goes to the lightest day at the best hour"]
-    F --> H["Clash or packed day offers a move"]
-  end
-
-  subgraph DELIVER["Deliver"]
-    I["Store on device"] --> J["Phone calendar (optional)"]
-    I --> K["Reminders and follow-ups"]
-    I --> L["Evening check-in and morning briefing"]
-  end
-
-  B --> C
-  D --> E
-  H --> I
+flowchart LR
+  A["You tap mic\nand speak"] --> B["Android on-device recognizer\n(Hold-to-talk, pause/resume)"]
+  B --> C["Raw transcript"]
+  C --> D["Cloud AI\nNemotron 3.5 Lightning 30B"]
+  D --> E["Structured JSON tasks\n(title, date, time, kind, duration, unsure)"]
+  E --> F["Validation & normalisation\nfixes vague cases"]
+  F --> G["Smart scheduler\n(flexible → best day/hour)\n(conflicts → suggest move)"]
+  G --> H["Save to on-device store"]
+  H --> I["Phone calendar & reminders\n(nudges, follow-ups, actions)"]
+  H --> J["Briefing & Evening check-in"]
 ```
 
-The model receives **today's date and the current time**, so relative phrases
-("tomorrow", "next week", "at 6pm") resolve against the real calendar. It
-replies in a strict JSON contract:
+### 1. Capture
+You speak; the phone's built-in `speech_to_text` turns it into text. Holding the mic means it keeps going even if you pause (no restart). No audio is uploaded — only the final text.
+
+### 2. Full extraction (AI)
+The text goes to **NVIDIA NIM (Nemotron 3.5 Lightning 30B)**. The prompt includes **today's date and the current time** so it can resolve *"tomorrow", "next week", "at 6pm", "before 5"* correctly. It returns a strict JSON array:
 
 ```json
 {
   "tasks": [
-    {"title": "Call mom", "date": "2026-10-15", "time": "17:00", "kind": "fixed",    "duration": 15, "unsure": false},
-    {"title": "Study",    "date": null,          "time": null,   "kind": "flexible", "duration": 45, "unsure": false}
+    { "title": "Call mom", "date": "2026-10-15", "time": "17:00", "kind": "fixed", "duration": 15, "unsure": false },
+    { "title": "Study",    "date": null,          "time": null,   "kind": "flexible", "duration": 45, "unsure": false }
   ]
 }
 ```
 
-| field | type | meaning |
-|---|---|---|
-| `title` | string | short imperative ("Call mom") |
-| `date` | `YYYY-MM-DD` or `null` | resolved from today; `null` when the day is vague ("this week") |
-| `time` | `HH:MM` or `null` | 24-hour clock, or `null` |
-| `kind` | `fixed` / `deadline` / `flexible` | specific time / before-by-until / no date and no time |
-| `duration` | int | estimated minutes |
-| `unsure` | bool | true when the day is genuinely ambiguous |
+### 3. Validation & normalisation (safety)
+Before anything is shown or scheduled, Dart cleans up the model's answer:
 
-The reply is **validated and normalised** in Dart before it reaches the UI — a
-time with no day becomes today (or tomorrow once it has passed), a dated task is
-never left `flexible`, and a `deadline` only survives if the sentence actually
-said *before / by / until*. A bad generation can never produce a malformed task.
-See [`lib/services/ai.dart`](lib/services/ai.dart) for the prompt and the
-contract.
+- **Time without day** → `today` if that time is still ahead, else `tomorrow`
+- **Date present but `kind=flexible`** → becomes `fixed`
+- **`kind=deadline` but no limit word (`before/by/until`)** → becomes `fixed`
+- **Deadline has a real limit word** → kept as `deadline`
+- **Past date** → flagged as `unsure` so you can quickly review
+- **Duration** → clamped to a sensible range, duplicates removed
 
-Everything after extraction — placement, conflicts, reminders, check-in,
-streaks — is plain, deterministic Dart. No black boxes where correctness
-matters.
+### 4. Planning & scheduling
+- **Flexible** (`date=null`) → placed on your **lightest day** at your **best hour**
+- **Fixed/Deadline** → checked against existing tasks; if there's an **overlap** or the day is **packed**, the app suggests moving it to an open slot
+- **Review screen** → tap any task's mic to re-say it and fix it instantly
 
-## Requirements
+### 5. Deliver & remind
+Tasks stay on the phone. You can optionally sync to the phone's calendar. The app nudges at the right time, follows up 45 minutes later with **Done / Later / Drop**, and handles the evening check-in and morning briefing.
 
-- Flutter **3.44+** (Dart 3.3+)
-- Android device or emulator with Google speech services
-- An API key for an OpenAI-compatible endpoint (the default is
-  [NVIDIA NIM](https://build.nvidia.com) — a key is created in a couple of minutes)
-
-## Getting started
-
-```bash
-git clone https://github.com/EngSenku/voice-tasks.git
-cd voice-tasks
-
-# The key is never committed. Pass it at build time:
-flutter run --dart-define=NVIDIA_API_KEY=nvapi-your-key-here
-```
-
-Or paste the key into the app: **AI settings** (tap the status line under the
-mic) → *API key*. It is stored in `shared_preferences` on the device and can be
-changed or rotated at any time.
-
-### Release build
-
-```bash
-flutter build apk --release --split-per-abi \
-  --dart-define=NVIDIA_API_KEY=nvapi-your-key-here
-```
-
-Install with:
-
-```bash
-adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-```
-
-## Configuration
-
-| Setting | Default | Where |
-|---|---|---|
-| API key | *(empty)* | `--dart-define=NVIDIA_API_KEY=…` or **AI settings** |
-| Model | `nvidia/nemotron-3.5-lightning-30b-a3b` | **AI settings** |
-| Base URL | `https://integrate.api.nvidia.com/v1` | **AI settings** |
-
-`String.fromEnvironment('NVIDIA_API_KEY')` keeps credentials out of the source
-tree entirely — the app ships with an empty default and asks for a key.
-
-## Privacy & security
-
-- **No backend, no account.** Tasks are stored on the phone only.
-- Voice is transcribed **on the device** by the system recognizer; only the
-  resulting **text** is sent to the model to be structured.
-- No API key is hard-coded in this repository. Supply it at build time or enter
-  it on the device.
-
-## Project structure
-
-```
-lib/
-├── main.dart                 # entry point, quick actions, notification wiring
-├── models/task.dart          # Task model, enums, date helpers
-├── theme.dart                # dark "glass" theme
-├── screens/                  # home, review, calendar, check-in
-├── services/
-│   ├── ai.dart               # ✦ prompt + JSON contract + normalisation
-│   ├── cloud_ai.dart         # NVIDIA NIM client
-│   ├── speech.dart           # recognizer with pause/resume merge
-│   ├── scheduler.dart        # slot finding, conflicts, packing
-│   ├── store.dart            # persistence + notification scheduling
-│   ├── notifier.dart         # reminders, repeats, follow-ups
-│   ├── calendar_sync.dart    # device calendar bridge
-│   ├── checkin.dart          # "what did you actually finish?" parsing
-│   ├── insights.dart         # streaks, best hour, briefing text
-│   └── quotes.dart           # cached daily quote
-└── widgets/                  # glass panels, mic button, quote card
-```
-
-## Testing
-
-```bash
-flutter analyze
-flutter test
-```
-
-The suite covers the AI JSON contract and normalisation (dates, times, kinds,
-de-duplication) and the speech-transcript merge logic — the two places where a
-mistake is most visible to the user.
-
-## Known limits
-
-- English only.
-- Reminders use inexact alarms, so they can arrive a few minutes late (this
-  avoids Android's special exact-alarm permission).
-- Speech quality depends on the phone's recognizer.
-- Location reminders ("when I'm near the pharmacy") need geofencing and are not
-  included yet.
-
-## License
-
-[MIT](LICENSE) © 2026 Mohamed Abbou
+See [`lib/services/ai.dart`](lib/services/ai.dart) for the full prompt and [`lib/services/cloud_ai.dart`](lib/services/cloud_ai.dart) for the API call.
